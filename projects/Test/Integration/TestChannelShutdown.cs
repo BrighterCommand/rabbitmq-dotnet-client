@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,10 +26,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Impl;
@@ -60,6 +62,53 @@ namespace Test.Integration
             await _channel.CloseAsync();
             await WaitAsync(tcs, TimeSpan.FromSeconds(5), "channel shutdown");
             Assert.True(autorecoveringChannel.ConsumerDispatcher.IsShutdown, "dispatcher should be shut down after CloseAsync");
+        }
+
+        [Fact]
+        public async Task TestConcurrentDisposeAsync_GH1749()
+        {
+            bool sawCallbackException = false;
+            int channelShutdownCount = 0;
+
+            _channel.CallbackExceptionAsync += (channel, ea) =>
+            {
+                sawCallbackException = true;
+                return Task.CompletedTask;
+            };
+
+            _channel.ChannelShutdownAsync += (channel, args) =>
+            {
+                Interlocked.Increment(ref channelShutdownCount);
+                return Task.CompletedTask;
+            };
+
+            var disposeTasks = new List<ValueTask>
+            {
+                _channel.DisposeAsync(),
+                _channel.DisposeAsync(),
+                _channel.DisposeAsync()
+            };
+
+            foreach (ValueTask vt in disposeTasks)
+            {
+                await vt;
+            }
+
+            Assert.Equal(1, channelShutdownCount);
+            Assert.False(sawCallbackException);
+
+            disposeTasks.Clear();
+            disposeTasks.Add(_conn.DisposeAsync());
+            disposeTasks.Add(_conn.DisposeAsync());
+            disposeTasks.Add(_conn.DisposeAsync());
+
+            foreach (ValueTask vt in disposeTasks)
+            {
+                await vt;
+            }
+
+            _channel = null;
+            _conn = null;
         }
     }
 }

@@ -1,25 +1,24 @@
 ﻿using System;
+using System.Globalization;
 using System.Net;
-using System.Threading;
 using System.Threading.Tasks;
+using Test;
 using Toxiproxy.Net;
 using Toxiproxy.Net.Toxics;
 
 namespace Integration
 {
-    public class ToxiproxyManager : IDisposable
+    public class ToxiproxyManager : IAsyncDisposable
     {
-        private const string ProxyNamePrefix = "rmq-";
-        private const ushort ProxyPortStart = 55669;
-        private static int s_proxyPort = ProxyPortStart;
+        public const ushort ProxyPort = 55672;
+        private const string ProxyNamePrefix = "rmq";
 
         private readonly string _testDisplayName;
-        private readonly int _proxyPort;
         private readonly Connection _proxyConnection;
         private readonly Client _proxyClient;
         private readonly Proxy _proxy;
 
-        private bool _disposedValue;
+        private bool _disposedValue = false;
 
         public ToxiproxyManager(string testDisplayName, bool isRunningInCI, bool isWindows)
         {
@@ -30,27 +29,25 @@ namespace Integration
 
             _testDisplayName = testDisplayName;
 
-            _proxyPort = Interlocked.Increment(ref s_proxyPort);
-
             /*
-            string now = DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
-            Console.WriteLine("{0} [DEBUG] {1} _proxyPort {2}", now, testDisplayName, _proxyPort);
-            */
-
-            _proxyConnection = new Connection(resetAllToxicsAndProxiesOnClose: true);
+             * Note:
+             * Do NOT set resetAllToxicsAndProxiesOnClose to true, because it will
+             * clear proxies being used by parallel TFM test runs
+             */
+            _proxyConnection = new Connection(resetAllToxicsAndProxiesOnClose: false);
             _proxyClient = _proxyConnection.Client();
 
             // to start, assume everything is on localhost
             _proxy = new Proxy
             {
                 Enabled = true,
-                Listen = $"{IPAddress.Loopback}:{_proxyPort}",
+                Listen = $"{IPAddress.Loopback}:{ProxyPort}",
                 Upstream = $"{IPAddress.Loopback}:5672",
             };
 
             if (isRunningInCI)
             {
-                _proxy.Listen = $"0.0.0.0:{_proxyPort}";
+                _proxy.Listen = $"0.0.0.0:{ProxyPort}";
 
                 // GitHub Actions
                 if (false == isWindows)
@@ -64,21 +61,39 @@ namespace Integration
             }
         }
 
-        public int ProxyPort => _proxyPort;
-
         public async Task InitializeAsync()
         {
-            _proxy.Name = $"{ProxyNamePrefix}{_testDisplayName}";
+            /*
+             * Note: since all Toxiproxy tests are in the same test class, they will run sequentially,
+             * so we can use 55672 for the listen port. In addition, TestTfmsInParallel is set to false
+             * so we know only one set of integration tests are running at a time
+             */
+            string proxyName = $"{ProxyNamePrefix}-{_testDisplayName}-{Util.Now}";
+            _proxy.Name = proxyName;
 
-            try
+            ushort retryCount = 5;
+            do
             {
-                await _proxyClient.DeleteAsync(_proxy);
-            }
-            catch
-            {
-            }
-
-            await _proxyClient.AddAsync(_proxy);
+                try
+                {
+                    await _proxyClient.AddAsync(_proxy);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    if (retryCount == 0)
+                    {
+                        throw;
+                    }
+                    else
+                    {
+                        string now = DateTime.Now.ToString("o", CultureInfo.InvariantCulture);
+                        Console.Error.WriteLine("{0} [ERROR] error initializing proxy '{1}': {2}", now, proxyName, ex);
+                    }
+                }
+                --retryCount;
+                await Task.Delay(TimeSpan.FromSeconds(1));
+            } while (retryCount >= 0);
         }
 
         public Task<T> AddToxicAsync<T>(T toxic) where T : ToxicBase
@@ -103,30 +118,24 @@ namespace Integration
             return _proxyClient.UpdateAsync(_proxy);
         }
 
-        public void Dispose()
-        {
-            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
-            Dispose(disposing: true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
+        public async ValueTask DisposeAsync()
         {
             if (!_disposedValue)
             {
-                if (disposing)
+                try
                 {
-                    try
-                    {
-                        _proxyClient.DeleteAsync(_proxy).GetAwaiter().GetResult();
-                        _proxyConnection.Dispose();
-                    }
-                    catch
-                    {
-                    }
+                    await _proxyClient.DeleteAsync(_proxy);
+                    _proxyConnection.Dispose();
                 }
-
-                _disposedValue = true;
+                catch (Exception ex)
+                {
+                    string now = DateTime.Now.ToString("o", CultureInfo.InvariantCulture);
+                    Console.Error.WriteLine("{0} [ERROR] error disposing proxy '{1}': {2}", now, _proxy.Name, ex);
+                }
+                finally
+                {
+                    _disposedValue = true;
+                }
             }
         }
     }

@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,11 +26,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -50,6 +51,7 @@ namespace RabbitMQ.Client.Framing
 
         private Connection _innerConnection;
         private bool _disposed;
+        private int _isDisposing;
 
         private Connection InnerConnection
         {
@@ -268,7 +270,15 @@ namespace RabbitMQ.Client.Framing
             return autorecoveringChannel;
         }
 
-        public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
 
         public async ValueTask DisposeAsync()
         {
@@ -277,10 +287,20 @@ namespace RabbitMQ.Client.Framing
                 return;
             }
 
+            if (IsDisposing)
+            {
+                return;
+            }
+
             try
             {
                 await _innerConnection.DisposeAsync()
                     .ConfigureAwait(false);
+
+                _channels.Clear();
+                _recordedEntitiesSemaphore.Dispose();
+                _channelsSemaphore.Dispose();
+                _recoveryCancellationTokenSource.Dispose();
             }
             catch (OperationInterruptedException)
             {
@@ -288,10 +308,6 @@ namespace RabbitMQ.Client.Framing
             }
             finally
             {
-                _channels.Clear();
-                _recordedEntitiesSemaphore.Dispose();
-                _channelsSemaphore.Dispose();
-                _recoveryCancellationTokenSource.Dispose();
                 _disposed = true;
             }
         }
@@ -307,7 +323,23 @@ namespace RabbitMQ.Client.Framing
                 ThrowDisposed();
             }
 
+            return;
+
+            [DoesNotReturn]
             static void ThrowDisposed() => throw new ObjectDisposedException(typeof(AutorecoveringConnection).FullName);
+        }
+
+        private bool IsDisposing
+        {
+            get
+            {
+                if (Interlocked.Exchange(ref _isDisposing, 1) != 0)
+                {
+                    return true;
+                }
+
+                return false;
+            }
         }
     }
 }

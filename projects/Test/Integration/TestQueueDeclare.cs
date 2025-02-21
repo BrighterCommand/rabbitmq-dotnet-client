@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -55,6 +55,22 @@ namespace Test.Integration
 
             QueueDeclareOk passiveDeclareResult = await _channel.QueueDeclarePassiveAsync(q);
             Assert.Equal(q, passiveDeclareResult.QueueName);
+        }
+
+        [Fact]
+        public async Task TestPassiveQueueDeclareException_GH1749()
+        {
+            string q = GenerateQueueName();
+            try
+            {
+                await _channel.QueueDeclarePassiveAsync(q);
+            }
+            catch (Exception)
+            {
+                // _output.WriteLine("{0} ex: {1}", _testDisplayName, ex);
+                await _channel.DisposeAsync();
+                _channel = null;
+            }
         }
 
         [Fact]
@@ -103,7 +119,7 @@ namespace Test.Integration
                     {
                         // sleep for a random amount of time to increase the chances
                         // of thread interleaving. MK.
-                        await Task.Delay(S_Random.Next(5, 50));
+                        await Task.Delay(RandomNext(5, 50));
                         string queueName = GenerateQueueName();
                         QueueDeclareOk r = await _channel.QueueDeclareAsync(queue: queueName,
                             durable: false, exclusive: true, autoDelete: false);
@@ -136,7 +152,7 @@ namespace Test.Integration
                     string qname = q;
                     try
                     {
-                        await Task.Delay(S_Random.Next(5, 50));
+                        await Task.Delay(RandomNext(5, 50));
 
                         QueueDeclareOk r = await _channel.QueueDeclarePassiveAsync(qname);
                         Assert.Equal(qname, r.QueueName);
@@ -176,7 +192,7 @@ namespace Test.Integration
                             {
                                 // sleep for a random amount of time to increase the chances
                                 // of thread interleaving. MK.
-                                await Task.Delay(S_Random.Next(5, 50));
+                                await Task.Delay(RandomNext(5, 50));
                                 string q = GenerateQueueName();
                                 await _channel.QueueDeclareAsync(q, false, false, false);
                                 queueNames.Add(q);
@@ -201,7 +217,7 @@ namespace Test.Integration
                         {
                             try
                             {
-                                await Task.Delay(S_Random.Next(5, 50));
+                                await Task.Delay(RandomNext(5, 50));
                                 await _channel.QueueDeleteAsync(queueName);
                             }
                             catch (NotSupportedException e)

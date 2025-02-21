@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -84,16 +84,9 @@ namespace Test
         public static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(2);
         public static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
         public static readonly TimeSpan RequestedConnectionTimeout = TimeSpan.FromSeconds(1);
-        public static readonly Random S_Random;
 
         static IntegrationFixture()
         {
-
-#if NET6_0_OR_GREATER
-            S_Random = Random.Shared;
-#else
-            S_Random = new Random();
-#endif
             s_isRunningInCI = InitIsRunningInCI();
             s_isVerbose = InitIsVerbose();
 
@@ -192,16 +185,27 @@ namespace Test
                     await _conn.CloseAsync();
                 }
             }
+            catch (Exception ex)
+            {
+                _output.WriteLine("[WARNING] IntegrationFixture.CloseAsync() exception: {0}", ex);
+            }
             finally
             {
-                _eventListener?.Dispose();
-                if (_channel is not null)
+                try
                 {
-                    await _channel.DisposeAsync();
+                    _eventListener?.Dispose();
+                    if (_channel is not null)
+                    {
+                        await _channel.DisposeAsync();
+                    }
+                    if (_conn is not null)
+                    {
+                        await _conn.DisposeAsync();
+                    }
                 }
-                if (_conn is not null)
+                catch (Exception ex)
                 {
-                    await _conn.DisposeAsync();
+                    _output.WriteLine("[WARNING] IntegrationFixture.DisposeAsync() exception: {0}", ex);
                 }
                 _channel = null;
                 _conn = null;
@@ -450,12 +454,12 @@ namespace Test
 
         protected string GenerateExchangeName()
         {
-            return $"{_testDisplayName}-exchange-{Guid.NewGuid()}";
+            return $"{_testDisplayName}-exchange-{Now}-{Guid.NewGuid()}";
         }
 
         protected string GenerateQueueName()
         {
-            return $"{_testDisplayName}-queue-{Guid.NewGuid()}";
+            return $"{_testDisplayName}-queue-{Now}-{Guid.NewGuid()}";
         }
 
         protected Task WithTemporaryNonExclusiveQueueAsync(Func<IChannel, string, Task> action)
@@ -540,7 +544,7 @@ namespace Test
         {
             return new ConnectionFactory
             {
-                ClientProvidedName = $"{_testDisplayName}:{Util.Now}:{GetConnectionIdx()}",
+                ClientProvidedName = $"{_testDisplayName}:{Now}:{GetConnectionIdx()}",
                 ContinuationTimeout = WaitSpan,
                 HandshakeContinuationTimeout = WaitSpan,
                 ConsumerDispatchConcurrency = consumerDispatchConcurrency
@@ -631,14 +635,20 @@ namespace Test
         protected static byte[] GetRandomBody(ushort size = 1024)
         {
             byte[] body = new byte[size];
-            S_Random.NextBytes(body);
+            Util.S_Random.NextBytes(body);
             return body;
         }
+
+        protected static string Now => Util.Now;
+
+        protected static string GenerateShortUuid() => Util.GenerateShortUuid();
+
+        protected static int RandomNext(int min, int max) => Util.S_Random.Next(min, max);
 
         protected static Task WaitForRecoveryAsync(IConnection conn)
         {
             TaskCompletionSource<bool> tcs = PrepareForRecovery((AutorecoveringConnection)conn);
-            return WaitAsync(tcs, "recovery succeded");
+            return WaitAsync(tcs, "recovery succeeded");
         }
 
         protected static TaskCompletionSource<bool> PrepareForRecovery(IConnection conn)

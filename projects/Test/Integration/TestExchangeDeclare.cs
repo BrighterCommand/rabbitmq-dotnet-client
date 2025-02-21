@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -62,7 +62,7 @@ namespace Test.Integration
                 {
                     try
                     {
-                        await Task.Delay(S_Random.Next(5, 50));
+                        await Task.Delay(RandomNext(5, 50));
                         string exchangeName = GenerateExchangeName();
                         await _channel.ExchangeDeclareAsync(exchange: exchangeName, type: "fanout", false, false);
                         await _channel.ExchangeBindAsync(destination: ex_destination, source: exchangeName, routingKey: "unused");
@@ -87,7 +87,7 @@ namespace Test.Integration
                 {
                     try
                     {
-                        await Task.Delay(S_Random.Next(5, 50));
+                        await Task.Delay(RandomNext(5, 50));
                         await _channel.ExchangeUnbindAsync(destination: ex_destination, source: exchangeName, routingKey: "unused",
                             noWait: false, arguments: null);
                         await _channel.ExchangeDeleteAsync(exchange: exchangeName, ifUnused: false);
@@ -112,6 +112,7 @@ namespace Test.Integration
             var exchangeNames = new ConcurrentBag<string>();
             var tasks = new List<Task>();
             NotSupportedException nse = null;
+            Exception unexpectedException = null;
             for (int i = 0; i < 256; i++)
             {
                 var t = Task.Run(async () =>
@@ -129,13 +130,24 @@ namespace Test.Integration
                             {
                                 nse = e;
                             }
+                            catch (Exception ex)
+                            {
+                                unexpectedException = ex;
+                            }
                         });
                 tasks.Add(t);
             }
 
             await Task.WhenAll(tasks);
 
-            Assert.Null(nse);
+            if (nse is not null)
+            {
+                Assert.Fail($"got unexpected NotSupportedException: {nse}");
+            }
+            if (unexpectedException is not null)
+            {
+                Assert.Fail($"got unexpected Exception: {unexpectedException}");
+            }
             tasks.Clear();
 
             foreach (string exchangeName in exchangeNames)
@@ -154,13 +166,24 @@ namespace Test.Integration
                             {
                                 nse = e;
                             }
+                            catch (Exception ex)
+                            {
+                                unexpectedException = ex;
+                            }
                         });
                 tasks.Add(t);
             }
 
             await Task.WhenAll(tasks);
 
-            Assert.Null(nse);
+            if (nse is not null)
+            {
+                Assert.Fail($"got unexpected NotSupportedException: {nse}");
+            }
+            if (unexpectedException is not null)
+            {
+                Assert.Fail($"got unexpected Exception: {unexpectedException}");
+            }
         }
     }
 }

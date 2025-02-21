@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,12 +26,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -46,6 +47,7 @@ namespace RabbitMQ.Client.Framing
     internal sealed partial class Connection : IConnection
     {
         private bool _disposed;
+        private int _isDisposing;
         private volatile bool _closed;
 
         private readonly ConnectionConfig _config;
@@ -318,6 +320,9 @@ namespace RabbitMQ.Client.Framing
         ///</remarks>
         internal async Task CloseAsync(ShutdownEventArgs reason, bool abort, TimeSpan timeout, CancellationToken cancellationToken)
         {
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+
             if (false == SetCloseReason(reason))
             {
                 // close reason is already set
@@ -328,11 +333,9 @@ namespace RabbitMQ.Client.Framing
             }
             else
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
                 await OnShutdownAsync(reason)
                     .ConfigureAwait(false);
-                await _session0.SetSessionClosingAsync(false, cancellationToken)
+                await _session0.SetSessionClosingAsync(false, cts.Token)
                     .ConfigureAwait(false);
 
                 try
@@ -341,7 +344,7 @@ namespace RabbitMQ.Client.Framing
                     if (false == _closed)
                     {
                         var method = new ConnectionClose(reason.ReplyCode, reason.ReplyText, 0, 0);
-                        await _session0.TransmitAsync(method, cancellationToken)
+                        await _session0.TransmitAsync(method, cts.Token)
                             .ConfigureAwait(false);
                     }
                 }
@@ -390,14 +393,14 @@ namespace RabbitMQ.Client.Framing
 
             try
             {
-                await _mainLoopTask.WaitAsync(timeout, cancellationToken)
+                await _mainLoopTask.WaitAsync(timeout, cts.Token)
                     .ConfigureAwait(false);
             }
             catch
             {
                 try
                 {
-                    await _frameHandler.CloseAsync(cancellationToken)
+                    await _frameHandler.CloseAsync(cts.Token)
                         .ConfigureAwait(false);
                 }
                 catch
@@ -485,11 +488,24 @@ namespace RabbitMQ.Client.Framing
             return _frameHandler.WriteAsync(frames, cancellationToken);
         }
 
-        public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
 
         public async ValueTask DisposeAsync()
         {
             if (_disposed)
+            {
+                return;
+            }
+
+            if (IsDisposing)
             {
                 return;
             }
@@ -503,7 +519,6 @@ namespace RabbitMQ.Client.Framing
                 }
 
                 _session0.Dispose();
-                _mainLoopCts.Dispose();
 
                 await _channel0.DisposeAsync()
                     .ConfigureAwait(false);
@@ -514,6 +529,7 @@ namespace RabbitMQ.Client.Framing
             }
             finally
             {
+                _mainLoopCts.Dispose();
                 _disposed = true;
             }
         }
@@ -523,13 +539,13 @@ namespace RabbitMQ.Client.Framing
         {
             if (_disposed)
             {
-                ThrowObjectDisposedException();
+                ThrowDisposed();
             }
 
-            static void ThrowObjectDisposedException()
-            {
-                throw new ObjectDisposedException(typeof(Connection).FullName);
-            }
+            return;
+
+            [DoesNotReturn]
+            static void ThrowDisposed() => throw new ObjectDisposedException(typeof(Connection).FullName);
         }
 
         public override string ToString()
@@ -537,9 +553,23 @@ namespace RabbitMQ.Client.Framing
             return $"Connection({_id},{Endpoint})";
         }
 
+        [DoesNotReturn]
         private static void ThrowAlreadyClosedException(ShutdownEventArgs closeReason)
         {
             throw new AlreadyClosedException(closeReason);
+        }
+
+        private bool IsDisposing
+        {
+            get
+            {
+                if (Interlocked.Exchange(ref _isDisposing, 1) != 0)
+                {
+                    return true;
+                }
+
+                return false;
+            }
         }
     }
 }

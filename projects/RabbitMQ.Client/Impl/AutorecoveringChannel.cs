@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,11 +26,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -48,6 +49,7 @@ namespace RabbitMQ.Client.Impl
         private AutorecoveringConnection _connection;
         private RecoveryAwareChannel _innerChannel;
         private bool _disposed;
+        private int _isDisposing;
 
         private ushort _prefetchCountConsumer;
         private ushort _prefetchCountGlobal;
@@ -252,7 +254,15 @@ namespace RabbitMQ.Client.Impl
         public override string ToString()
             => InnerChannel.ToString();
 
-        public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
 
         public async ValueTask DisposeAsync()
         {
@@ -261,14 +271,25 @@ namespace RabbitMQ.Client.Impl
                 return;
             }
 
-            if (IsOpen)
+            if (IsDisposing)
             {
-                await this.AbortAsync()
-                    .ConfigureAwait(false);
+                return;
             }
 
-            _recordedConsumerTags.Clear();
-            _disposed = true;
+            try
+            {
+                if (IsOpen)
+                {
+                    await this.AbortAsync()
+                        .ConfigureAwait(false);
+                }
+
+                _recordedConsumerTags.Clear();
+            }
+            finally
+            {
+                _disposed = true;
+            }
         }
 
         public ValueTask<ulong> GetNextPublishSequenceNumberAsync(CancellationToken cancellationToken = default) => InnerChannel.GetNextPublishSequenceNumberAsync(cancellationToken);
@@ -482,7 +503,23 @@ namespace RabbitMQ.Client.Impl
                 ThrowDisposed();
             }
 
+            return;
+
+            [DoesNotReturn]
             static void ThrowDisposed() => throw new ObjectDisposedException(typeof(AutorecoveringChannel).FullName);
+        }
+
+        private bool IsDisposing
+        {
+            get
+            {
+                if (Interlocked.Exchange(ref _isDisposing, 1) != 0)
+                {
+                    return true;
+                }
+
+                return false;
+            }
         }
     }
 }

@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -59,7 +59,12 @@ namespace RabbitMQ.Client.Impl
         private ShutdownEventArgs? _closeReason;
         public ShutdownEventArgs? CloseReason => Volatile.Read(ref _closeReason);
 
+        private TaskCompletionSource<bool>? _serverOriginatedChannelCloseTcs;
+
         internal readonly IConsumerDispatcher ConsumerDispatcher;
+
+        private bool _disposed;
+        private int _isDisposing;
 
         public Channel(ISession session, CreateChannelOptions createChannelOptions)
         {
@@ -251,10 +256,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
                 ChannelShutdownAsync -= k.OnConnectionShutdownAsync;
             }
@@ -298,10 +300,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -337,10 +336,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -387,10 +383,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
 
@@ -514,27 +507,56 @@ namespace RabbitMQ.Client.Impl
 
         void IDisposable.Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             Dispose(true);
         }
 
         protected virtual void Dispose(bool disposing)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (IsDisposing)
+            {
+                return;
+            }
+
             if (disposing)
             {
-                if (IsOpen)
+                try
                 {
-                    this.AbortAsync().GetAwaiter().GetResult();
-                }
+                    if (IsOpen)
+                    {
+                        this.AbortAsync().GetAwaiter().GetResult();
+                    }
 
-                ConsumerDispatcher.Dispose();
-                _rpcSemaphore.Dispose();
-                _confirmSemaphore.Dispose();
-                _outstandingPublisherConfirmationsRateLimiter?.Dispose();
+                    _serverOriginatedChannelCloseTcs?.Task.Wait(TimeSpan.FromSeconds(5));
+
+                    ConsumerDispatcher.Dispose();
+                    _rpcSemaphore.Dispose();
+                    _confirmSemaphore.Dispose();
+                    _outstandingPublisherConfirmationsRateLimiter?.Dispose();
+                }
+                finally
+                {
+                    _disposed = true;
+                }
             }
         }
 
         public async ValueTask DisposeAsync()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             await DisposeAsyncCore()
                 .ConfigureAwait(false);
 
@@ -543,18 +565,43 @@ namespace RabbitMQ.Client.Impl
 
         protected virtual async ValueTask DisposeAsyncCore()
         {
-            if (IsOpen)
+            if (_disposed)
             {
-                await this.AbortAsync().ConfigureAwait(false);
+                return;
             }
 
-            ConsumerDispatcher.Dispose();
-            _rpcSemaphore.Dispose();
-            _confirmSemaphore.Dispose();
-            if (_outstandingPublisherConfirmationsRateLimiter is not null)
+            if (IsDisposing)
             {
-                await _outstandingPublisherConfirmationsRateLimiter.DisposeAsync()
-                    .ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                if (IsOpen)
+                {
+                    await this.AbortAsync()
+                        .ConfigureAwait(false);
+                }
+
+                if (_serverOriginatedChannelCloseTcs is not null)
+                {
+                    await _serverOriginatedChannelCloseTcs.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                        .ConfigureAwait(false);
+                }
+
+                ConsumerDispatcher.Dispose();
+                _rpcSemaphore.Dispose();
+                _confirmSemaphore.Dispose();
+
+                if (_outstandingPublisherConfirmationsRateLimiter is not null)
+                {
+                    await _outstandingPublisherConfirmationsRateLimiter.DisposeAsync()
+                        .ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                _disposed = true;
             }
         }
 
@@ -651,23 +698,41 @@ namespace RabbitMQ.Client.Impl
 
         protected async Task<bool> HandleChannelCloseAsync(IncomingCommand cmd, CancellationToken cancellationToken)
         {
-            var channelClose = new ChannelClose(cmd.MethodSpan);
-            SetCloseReason(new ShutdownEventArgs(ShutdownInitiator.Peer,
-                channelClose._replyCode,
-                channelClose._replyText,
-                channelClose._classId,
-                channelClose._methodId));
+            TaskCompletionSource<bool>? serverOriginatedChannelCloseTcs = _serverOriginatedChannelCloseTcs;
+            if (serverOriginatedChannelCloseTcs is null)
+            {
+                // Attempt to assign the new TCS only if _tcs is still null
+                _ = Interlocked.CompareExchange(ref _serverOriginatedChannelCloseTcs,
+                    new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously), null);
+            }
 
-            await Session.CloseAsync(_closeReason, notify: false)
-                .ConfigureAwait(false);
+            try
+            {
+                var channelClose = new ChannelClose(cmd.MethodSpan);
+                SetCloseReason(new ShutdownEventArgs(ShutdownInitiator.Peer,
+                    channelClose._replyCode,
+                    channelClose._replyText,
+                    channelClose._classId,
+                    channelClose._methodId));
 
-            var method = new ChannelCloseOk();
-            await ModelSendAsync(in method, cancellationToken)
-                .ConfigureAwait(false);
+                await Session.CloseAsync(_closeReason, notify: false)
+                    .ConfigureAwait(false);
 
-            await Session.NotifyAsync(cancellationToken)
-                .ConfigureAwait(false);
-            return true;
+                var method = new ChannelCloseOk();
+                await ModelSendAsync(in method, cancellationToken)
+                    .ConfigureAwait(false);
+
+                await Session.NotifyAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                _serverOriginatedChannelCloseTcs?.TrySetResult(true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _serverOriginatedChannelCloseTcs?.TrySetException(ex);
+                throw;
+            }
         }
 
         protected async Task<bool> HandleChannelCloseOkAsync(IncomingCommand cmd, CancellationToken cancellationToken)
@@ -679,11 +744,13 @@ namespace RabbitMQ.Client.Impl
             await FinishCloseAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            if (_continuationQueue.TryPeek<ChannelCloseAsyncRpcContinuation>(out ChannelCloseAsyncRpcContinuation? k))
+            if (_continuationQueue.TryPeek(out ChannelCloseAsyncRpcContinuation? k))
             {
-                _continuationQueue.Next();
-                await k.HandleCommandAsync(cmd)
-                    .ConfigureAwait(false);
+                using (IRpcContinuation c = _continuationQueue.Next())
+                {
+                    await k.HandleCommandAsync(cmd)
+                        .ConfigureAwait(false);
+                }
             }
 
             return true;
@@ -728,11 +795,16 @@ namespace RabbitMQ.Client.Impl
             var reason = new ShutdownEventArgs(ShutdownInitiator.Peer, method._replyCode, method._replyText, method._classId, method._methodId);
             try
             {
-                await Session.Connection.ClosedViaPeerAsync(reason, cancellationToken)
-                    .ConfigureAwait(false);
-
+                /*
+                 * rabbitmq-dotnet-client#1777
+                 * Send the connection.close-ok message prior to closing within the client,
+                 * because ClosedViaPeerAsync will stop the main loop
+                 */
                 var replyMethod = new ConnectionCloseOk();
                 await ModelSendAsync(in replyMethod, cancellationToken)
+                    .ConfigureAwait(false);
+
+                await Session.Connection.ClosedViaPeerAsync(reason, cancellationToken)
                     .ConfigureAwait(false);
 
                 SetCloseReason(Session.Connection.CloseReason!);
@@ -753,10 +825,12 @@ namespace RabbitMQ.Client.Impl
 
         protected async Task<bool> HandleConnectionSecureAsync(IncomingCommand cmd, CancellationToken cancellationToken)
         {
-            var k = (ConnectionSecureOrTuneAsyncRpcContinuation)_continuationQueue.Next();
-            await k.HandleCommandAsync(new IncomingCommand())
-                .ConfigureAwait(false); // release the continuation.
-            return true;
+            using (var k = (ConnectionSecureOrTuneAsyncRpcContinuation)_continuationQueue.Next())
+            {
+                await k.HandleCommandAsync(new IncomingCommand())
+                    .ConfigureAwait(false); // release the continuation.
+                return true;
+            }
         }
 
         protected async Task<bool> HandleConnectionStartAsync(IncomingCommand cmd, CancellationToken cancellationToken)
@@ -783,12 +857,12 @@ namespace RabbitMQ.Client.Impl
 
         protected async Task<bool> HandleConnectionTuneAsync(IncomingCommand cmd, CancellationToken cancellationToken)
         {
-            // Note: `using` here to ensure instance is disposed
-            using var k = (ConnectionSecureOrTuneAsyncRpcContinuation)_continuationQueue.Next();
-
-            // Note: releases the continuation and returns the buffers
-            await k.HandleCommandAsync(cmd)
-                .ConfigureAwait(false);
+            using (var k = (ConnectionSecureOrTuneAsyncRpcContinuation)_continuationQueue.Next())
+            {
+                // Note: releases the continuation and returns the buffers
+                await k.HandleCommandAsync(cmd)
+                    .ConfigureAwait(false);
+            }
 
             return true;
         }
@@ -858,10 +932,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -890,10 +961,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -918,10 +986,10 @@ namespace RabbitMQ.Client.Impl
                 BasicGetResult? result = await k;
 
                 using Activity? activity = result != null
-                    ? RabbitMQActivitySource.Receive(result.RoutingKey,
+                    ? RabbitMQActivitySource.BasicGet(result.RoutingKey,
                         result.Exchange,
                         result.DeliveryTag, result.BasicProperties, result.Body.Length)
-                    : RabbitMQActivitySource.ReceiveEmpty(queue);
+                    : RabbitMQActivitySource.BasicGetEmpty(queue);
 
                 activity?.SetStartTime(k.StartTime);
 
@@ -929,10 +997,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -971,10 +1036,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1001,10 +1063,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1042,10 +1101,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1089,10 +1145,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1129,10 +1182,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1170,10 +1220,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1243,10 +1290,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1284,10 +1328,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1339,10 +1380,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1367,10 +1405,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1398,10 +1433,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1427,10 +1459,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1456,10 +1485,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1485,10 +1511,7 @@ namespace RabbitMQ.Client.Impl
             }
             finally
             {
-                if (false == enqueued)
-                {
-                    k.Dispose();
-                }
+                MaybeDisposeContinuation(enqueued, k);
                 _rpcSemaphore.Release();
             }
         }
@@ -1498,6 +1521,32 @@ namespace RabbitMQ.Client.Impl
         {
             var channel = new Channel(session, createChannelOptions);
             return channel.OpenAsync(createChannelOptions, cancellationToken);
+        }
+
+        private void MaybeDisposeContinuation(bool enqueued, IRpcContinuation continuation)
+        {
+            try
+            {
+                if (enqueued)
+                {
+                    if (_continuationQueue.TryPeek(out IRpcContinuation? enqueuedContinuation))
+                    {
+                        if (object.ReferenceEquals(continuation, enqueuedContinuation))
+                        {
+                            IRpcContinuation dequeuedContinuation = _continuationQueue.Next();
+                            dequeuedContinuation.Dispose();
+                        }
+                    }
+                }
+                else
+                {
+                    continuation.Dispose();
+                }
+            }
+            catch
+            {
+                // TODO low-level debug logging
+            }
         }
 
         /// <summary>
@@ -1585,6 +1634,19 @@ namespace RabbitMQ.Client.Impl
                     {
                         return Task.FromResult(false);
                     }
+            }
+        }
+
+        private bool IsDisposing
+        {
+            get
+            {
+                if (Interlocked.Exchange(ref _isDisposing, 1) != 0)
+                {
+                    return true;
+                }
+
+                return false;
             }
         }
     }

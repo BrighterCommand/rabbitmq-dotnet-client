@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -40,7 +40,7 @@ namespace RabbitMQ.Client.Logging
     {
         public static readonly RabbitMqClientEventSource Log = new RabbitMqClientEventSource();
 
-#if NET6_0_OR_GREATER
+#if NET
         private readonly PollingCounter _connectionOpenedCounter;
         private readonly PollingCounter _openConnectionCounter;
         private readonly PollingCounter _channelOpenedCounter;
@@ -54,7 +54,7 @@ namespace RabbitMQ.Client.Logging
         public RabbitMqClientEventSource()
             : base("rabbitmq-client")
         {
-#if NET6_0_OR_GREATER
+#if NET
             _connectionOpenedCounter = new PollingCounter("total-connections-opened", this, () => s_connectionsOpened)
             {
                 DisplayName = "Total connections opened"
@@ -128,7 +128,7 @@ namespace RabbitMQ.Client.Logging
             }
         }
 
-#if NET6_0_OR_GREATER
+#if NET
         [Event(3, Keywords = Keywords.Log, Level = EventLevel.Error)]
         [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "The properties are preserved with the DynamicallyAccessedMembers attribute.")]
         public void Error(string message, RabbitMqExceptionDetail ex)

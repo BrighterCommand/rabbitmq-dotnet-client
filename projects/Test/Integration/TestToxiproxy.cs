@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -46,6 +46,8 @@ namespace Test.Integration
     public class TestToxiproxy : IntegrationFixture
     {
         private readonly TimeSpan _heartbeatTimeout = TimeSpan.FromSeconds(1);
+        private ToxiproxyManager _toxiproxyManager;
+        private int _proxyPort;
 
         public TestToxiproxy(ITestOutputHelper output) : base(output)
         {
@@ -59,7 +61,26 @@ namespace Test.Integration
             Assert.Null(_conn);
             Assert.Null(_channel);
 
-            return Task.CompletedTask;
+            if (AreToxiproxyTestsEnabled)
+            {
+                _toxiproxyManager = new ToxiproxyManager(_testDisplayName, IsRunningInCI, IsWindows);
+                _proxyPort = ToxiproxyManager.ProxyPort;
+                return _toxiproxyManager.InitializeAsync();
+            }
+            else
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        public override async Task DisposeAsync()
+        {
+            if (AreToxiproxyTestsEnabled)
+            {
+                await _toxiproxyManager.DisposeAsync();
+            }
+
+            await base.DisposeAsync();
         }
 
         [SkippableFact]
@@ -68,11 +89,8 @@ namespace Test.Integration
         {
             Skip.IfNot(AreToxiproxyTestsEnabled, "RABBITMQ_TOXIPROXY_TESTS is not set, skipping test");
 
-            using var pm = new ToxiproxyManager(_testDisplayName, IsRunningInCI, IsWindows);
-            await pm.InitializeAsync();
-
             ConnectionFactory cf = CreateConnectionFactory();
-            cf.Port = pm.ProxyPort;
+            cf.Port = _proxyPort;
             cf.AutomaticRecoveryEnabled = true;
             cf.NetworkRecoveryInterval = TimeSpan.FromSeconds(1);
             cf.RequestedHeartbeat = TimeSpan.FromSeconds(1);
@@ -172,11 +190,11 @@ namespace Test.Integration
 
             Assert.True(await messagePublishedTcs.Task);
 
-            Task disableProxyTask = pm.DisableAsync();
+            Task disableProxyTask = _toxiproxyManager.DisableAsync();
 
             await Task.WhenAll(disableProxyTask, connectionShutdownTcs.Task);
 
-            Task enableProxyTask = pm.EnableAsync();
+            Task enableProxyTask = _toxiproxyManager.EnableAsync();
 
             Task whenAllTask = Task.WhenAll(enableProxyTask, recoverySucceededTcs.Task);
             await whenAllTask.WaitAsync(TimeSpan.FromSeconds(15));
@@ -193,11 +211,8 @@ namespace Test.Integration
         {
             Skip.IfNot(AreToxiproxyTestsEnabled, "RABBITMQ_TOXIPROXY_TESTS is not set, skipping test");
 
-            using var pm = new ToxiproxyManager(_testDisplayName, IsRunningInCI, IsWindows);
-            await pm.InitializeAsync();
-
             ConnectionFactory cf = CreateConnectionFactory();
-            cf.Port = pm.ProxyPort;
+            cf.Port = _proxyPort;
             cf.RequestedHeartbeat = _heartbeatTimeout;
             cf.AutomaticRecoveryEnabled = false;
 
@@ -221,11 +236,15 @@ namespace Test.Integration
 
             Assert.True(await tcs.Task);
 
-            var timeoutToxic = new TimeoutToxic();
+            string toxicName = $"rmq-localhost-timeout-{Now}-{GenerateShortUuid()}";
+            var timeoutToxic = new TimeoutToxic
+            {
+                Name = toxicName
+            };
             timeoutToxic.Attributes.Timeout = 0;
             timeoutToxic.Toxicity = 1.0;
 
-            Task<TimeoutToxic> addToxicTask = pm.AddToxicAsync(timeoutToxic);
+            Task<TimeoutToxic> addToxicTask = _toxiproxyManager.AddToxicAsync(timeoutToxic);
 
             await Assert.ThrowsAsync<AlreadyClosedException>(() =>
             {
@@ -239,11 +258,8 @@ namespace Test.Integration
         {
             Skip.IfNot(AreToxiproxyTestsEnabled, "RABBITMQ_TOXIPROXY_TESTS is not set, skipping test");
 
-            using var pm = new ToxiproxyManager(_testDisplayName, IsRunningInCI, IsWindows);
-            await pm.InitializeAsync();
-
             ConnectionFactory cf = CreateConnectionFactory();
-            cf.Endpoint = new AmqpTcpEndpoint(IPAddress.Loopback.ToString(), pm.ProxyPort);
+            cf.Endpoint = new AmqpTcpEndpoint(IPAddress.Loopback.ToString(), _proxyPort);
             cf.RequestedHeartbeat = TimeSpan.FromSeconds(5);
             cf.AutomaticRecoveryEnabled = true;
 
@@ -271,17 +287,19 @@ namespace Test.Integration
 
             Assert.True(await channelCreatedTcs.Task);
 
-            const string toxicName = "rmq-localhost-reset_peer";
-            var resetPeerToxic = new ResetPeerToxic();
-            resetPeerToxic.Name = toxicName;
+            string toxicName = $"rmq-localhost-reset_peer-{Now}-{GenerateShortUuid()}";
+            var resetPeerToxic = new ResetPeerToxic
+            {
+                Name = toxicName
+            };
             resetPeerToxic.Attributes.Timeout = 500;
             resetPeerToxic.Toxicity = 1.0;
 
-            Task<ResetPeerToxic> addToxicTask = pm.AddToxicAsync(resetPeerToxic);
+            Task<ResetPeerToxic> addToxicTask = _toxiproxyManager.AddToxicAsync(resetPeerToxic);
 
             await Task.WhenAll(addToxicTask, connectionShutdownTcs.Task);
 
-            await pm.RemoveToxicAsync(toxicName);
+            await _toxiproxyManager.RemoveToxicAsync(toxicName);
 
             await recoveryTask;
         }
@@ -296,11 +314,8 @@ namespace Test.Integration
             const int MaxOutstandingConfirms = 8;
             const int BatchSize = MaxOutstandingConfirms * 2;
 
-            using var pm = new ToxiproxyManager(_testDisplayName, IsRunningInCI, IsWindows);
-            await pm.InitializeAsync();
-
             ConnectionFactory cf = CreateConnectionFactory();
-            cf.Endpoint = new AmqpTcpEndpoint(IPAddress.Loopback.ToString(), pm.ProxyPort);
+            cf.Endpoint = new AmqpTcpEndpoint(IPAddress.Loopback.ToString(), _proxyPort);
             cf.RequestedHeartbeat = TimeSpan.FromSeconds(5);
             cf.AutomaticRecoveryEnabled = true;
 
@@ -354,16 +369,18 @@ namespace Test.Integration
 
             await channelCreatedTcs.Task;
 
-            const string toxicName = "rmq-localhost-bandwidth";
-            var bandwidthToxic = new BandwidthToxic();
-            bandwidthToxic.Name = toxicName;
+            string toxicName = $"rmq-localhost-bandwidth-{Now}-{GenerateShortUuid()}";
+            var bandwidthToxic = new BandwidthToxic
+            {
+                Name = toxicName
+            };
             bandwidthToxic.Attributes.Rate = 0;
             bandwidthToxic.Toxicity = 1.0;
             bandwidthToxic.Stream = ToxicDirection.DownStream;
 
             await Task.Delay(TimeSpan.FromSeconds(1));
 
-            Task<BandwidthToxic> addToxicTask = pm.AddToxicAsync(bandwidthToxic);
+            Task<BandwidthToxic> addToxicTask = _toxiproxyManager.AddToxicAsync(bandwidthToxic);
 
             while (true)
             {
@@ -379,7 +396,7 @@ namespace Test.Integration
             }
 
             await addToxicTask.WaitAsync(WaitSpan);
-            await pm.RemoveToxicAsync(toxicName).WaitAsync(WaitSpan);
+            await _toxiproxyManager.RemoveToxicAsync(toxicName).WaitAsync(WaitSpan);
 
             await messagesPublishedTcs.Task.WaitAsync(WaitSpan);
             await publishTask.WaitAsync(WaitSpan);
