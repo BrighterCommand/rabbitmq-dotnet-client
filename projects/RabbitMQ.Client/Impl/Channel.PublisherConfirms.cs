@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -344,7 +344,24 @@ namespace RabbitMQ.Client.Impl
         {
             if (_publisherConfirmationsEnabled)
             {
-                _confirmSemaphore.Release();
+                try
+                {
+                    _confirmSemaphore.Release();
+                }
+                catch (SemaphoreFullException ex)
+                {
+                    /*
+                     * rabbitmq/rabbitmq-dotnet-client-1793
+                     * If MaybeStartPublisherConfirmationTracking throws an exception *prior* to acquiring
+                     * _confirmSemaphore, the above Release() call will throw SemaphoreFullException.
+                     * In "normal" cases, publisherConfirmationInfo will thus be null, but if not, throw
+                     * a "bug found" exception here.
+                     */
+                    if (publisherConfirmationInfo is not null)
+                    {
+                        throw new InvalidOperationException(InternalConstants.BugFound, ex);
+                    }
+                }
 
                 if (publisherConfirmationInfo is not null)
                 {

@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -181,7 +181,7 @@ namespace RabbitMQ.Client.Framing
                 // frames for non-zero channels (and any inbound
                 // commands on channel zero that aren't
                 // Connection.CloseOk) must be discarded.
-                if (_closeReason is null)
+                if (CloseReason is null)
                 {
                     // No close reason, not quiescing the
                     // connection. Handle the frame. (Of course, the

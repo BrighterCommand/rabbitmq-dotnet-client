@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -37,7 +37,7 @@ namespace RabbitMQ.Client
 {
     public class DefaultEndpointResolver : IEndpointResolver
     {
-#if !NET6_0_OR_GREATER
+#if !NET
         private readonly Random s_rnd = new Random();
 #endif
         private readonly List<AmqpTcpEndpoint> _endpoints;
@@ -49,7 +49,7 @@ namespace RabbitMQ.Client
 
         public IEnumerable<AmqpTcpEndpoint> All()
         {
-#if NET6_0_OR_GREATER
+#if NET
             return _endpoints.OrderBy(item => Random.Shared.Next());
 #else
             return _endpoints.OrderBy(item => s_rnd.Next());

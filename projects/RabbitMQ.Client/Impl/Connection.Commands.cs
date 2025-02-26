@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -76,7 +76,7 @@ namespace RabbitMQ.Client.Framing
         {
             var connectionStartCell = new TaskCompletionSource<ConnectionStartDetails?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-#if NET6_0_OR_GREATER
+#if NET
             using CancellationTokenRegistration ctr = cancellationToken.UnsafeRegister((object? state) =>
             {
                 if (state != null)
@@ -197,7 +197,7 @@ namespace RabbitMQ.Client.Framing
             // Our list is in order of preference, the server one is not.
             foreach (IAuthMechanismFactory factory in _config.AuthMechanisms)
             {
-#if NET6_0_OR_GREATER
+#if NET
                 if (supportedMechanismNames.Contains(factory.Name, StringComparison.OrdinalIgnoreCase))
 #else
                 if (supportedMechanismNames.IndexOf(factory.Name, StringComparison.OrdinalIgnoreCase) >= 0)

@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -342,7 +342,8 @@ namespace Test.SequentialIntegration
         private void AssertActivityData(bool useRoutingKeyAsOperationName, string queueName,
             List<Activity> activityList, bool isDeliver = false, string baggageGuid = null)
         {
-            string childName = isDeliver ? "process" : "receive";
+            string childName = isDeliver ? "deliver" : "fetch";
+            string childType = isDeliver ? "process" : "receive";
             Activity[] activities = activityList.ToArray();
             Assert.NotEmpty(activities);
             foreach (var item in activities)
@@ -354,11 +355,11 @@ namespace Test.SequentialIntegration
             }
 
             Activity sendActivity = activities.First(x =>
-                x.OperationName == (useRoutingKeyAsOperationName ? $"{queueName} send" : "send") &&
+                x.OperationName == (useRoutingKeyAsOperationName ? $"publish {queueName}" : "publish") &&
                 x.GetTagItem(RabbitMQActivitySource.MessagingDestinationRoutingKey) is string routingKeyTag &&
                 routingKeyTag == $"{queueName}");
             Activity receiveActivity = activities.Single(x =>
-                x.OperationName == (useRoutingKeyAsOperationName ? $"{queueName} {childName}" : $"{childName}") &&
+                x.OperationName == (useRoutingKeyAsOperationName ? $"{childName} {queueName}" : childName) &&
                 x.Links.First().Context.TraceId == sendActivity.TraceId);
             Assert.Equal(ActivityKind.Producer, sendActivity.Kind);
             Assert.Equal(ActivityKind.Consumer, receiveActivity.Kind);
@@ -380,6 +381,10 @@ namespace Test.SequentialIntegration
             AssertIntTagGreaterThanZero(sendActivity, RabbitMQActivitySource.MessagingEnvelopeSize);
             AssertIntTagGreaterThanZero(sendActivity, RabbitMQActivitySource.MessagingBodySize);
             AssertIntTagGreaterThanZero(receiveActivity, RabbitMQActivitySource.MessagingBodySize);
+            AssertStringTagEquals(receiveActivity, RabbitMQActivitySource.MessagingOperationType, childType);
+            AssertStringTagEquals(receiveActivity, RabbitMQActivitySource.MessagingOperationName, childName);
+            AssertStringTagEquals(sendActivity, RabbitMQActivitySource.MessagingOperationType, "send");
+            AssertStringTagEquals(sendActivity, RabbitMQActivitySource.MessagingOperationName, "publish");
         }
     }
 }

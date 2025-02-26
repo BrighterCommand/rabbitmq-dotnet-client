@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -62,7 +62,7 @@ namespace RabbitMQ.Client.Impl
                 var cmd = new BasicPublish(exchange, routingKey, mandatory, default);
 
                 using Activity? sendActivity = RabbitMQActivitySource.PublisherHasListeners
-                    ? RabbitMQActivitySource.Send(routingKey, exchange, body.Length)
+                    ? RabbitMQActivitySource.BasicPublish(routingKey, exchange, body.Length)
                     : default;
 
                 ulong publishSequenceNumber = 0;
@@ -117,7 +117,7 @@ namespace RabbitMQ.Client.Impl
                 var cmd = new BasicPublishMemory(exchange.Bytes, routingKey.Bytes, mandatory, default);
 
                 using Activity? sendActivity = RabbitMQActivitySource.PublisherHasListeners
-                    ? RabbitMQActivitySource.Send(routingKey.Value, exchange.Value, body.Length)
+                    ? RabbitMQActivitySource.BasicPublish(routingKey.Value, exchange.Value, body.Length)
                     : default;
 
                 ulong publishSequenceNumber = 0;

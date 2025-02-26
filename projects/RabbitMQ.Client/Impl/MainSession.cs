@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 // We use spec version 0-9 for common constants such as frame types,
@@ -47,6 +47,7 @@ namespace RabbitMQ.Client.Impl
         private volatile bool _closeIsServerInitiated;
         private volatile bool _closing;
         private readonly SemaphoreSlim _closingSemaphore = new SemaphoreSlim(1, 1);
+        private bool _disposed = false;
 
         public MainSession(Connection connection, uint maxBodyLength)
             : base(connection, 0, maxBodyLength)
@@ -83,6 +84,13 @@ namespace RabbitMQ.Client.Impl
 
         public async Task SetSessionClosingAsync(bool closeIsServerInitiated, CancellationToken cancellationToken)
         {
+            if (_disposed)
+            {
+                _closing = true;
+                _closeIsServerInitiated = closeIsServerInitiated;
+                return;
+            }
+
             if (await _closingSemaphore.WaitAsync(InternalConstants.DefaultConnectionAbortTimeout, cancellationToken)
                     .ConfigureAwait(false))
             {
@@ -122,6 +130,24 @@ namespace RabbitMQ.Client.Impl
             return base.TransmitAsync(in cmd, cancellationToken);
         }
 
-        public void Dispose() => ((IDisposable)_closingSemaphore).Dispose();
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _closingSemaphore.Dispose();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _disposed = true;
+            }
+        }
     }
 }

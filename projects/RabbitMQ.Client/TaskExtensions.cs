@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -37,7 +37,7 @@ namespace RabbitMQ.Client
 {
     internal static class TaskExtensions
     {
-#if NET6_0_OR_GREATER
+#if NET
         public static bool IsCompletedSuccessfully(this Task task)
         {
             return task.IsCompletedSuccessfully;
@@ -49,7 +49,7 @@ namespace RabbitMQ.Client
         }
 #endif
 
-#if !NET6_0_OR_GREATER
+#if !NET
         private static readonly TaskContinuationOptions s_tco = TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously;
         private static void IgnoreTaskContinuation(Task t, object s) => t.Exception.Handle(e => true);
 
@@ -126,7 +126,7 @@ namespace RabbitMQ.Client
 
         public static Task WaitAsync(this Task task, TimeSpan timeout)
         {
-#if NET6_0_OR_GREATER
+#if NET
             if (task.IsCompletedSuccessfully)
             {
                 return task;
@@ -171,7 +171,7 @@ namespace RabbitMQ.Client
                 return;
             }
 
-#if NET6_0_OR_GREATER
+#if NET
             Task task = valueTask.AsTask();
             await task.WaitAsync(timeout)
                 .ConfigureAwait(false);

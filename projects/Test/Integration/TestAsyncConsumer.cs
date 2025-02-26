@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -71,6 +71,7 @@ namespace Test.Integration
 
             var consumer = new AsyncEventingBasicConsumer(_channel);
 
+            var consumerRegisteredTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var publish1SyncSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var publish2SyncSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -105,6 +106,20 @@ namespace Test.Integration
                     return Task.CompletedTask;
                 };
 
+                consumer.RegisteredAsync += (object sender, ConsumerEventArgs ea) =>
+                {
+                    if (ReferenceEquals(consumer, sender))
+                    {
+                        consumerRegisteredTcs.SetResult(true);
+                    }
+                    else
+                    {
+                        var ex = Xunit.Sdk.EqualException.ForMismatchedValues(consumer, sender);
+                        consumerRegisteredTcs.SetException(ex);
+                    }
+                    return Task.CompletedTask;
+                };
+
                 consumer.ReceivedAsync += (o, a) =>
                 {
                     if (ByteArraysEqual(a.Body.Span, body1))
@@ -126,6 +141,7 @@ namespace Test.Integration
                 };
 
                 await _channel.BasicConsumeAsync(q.QueueName, true, string.Empty, false, false, null, consumer);
+                await consumerRegisteredTcs.Task.WaitAsync(WaitSpan);
 
                 try
                 {
@@ -703,7 +719,7 @@ namespace Test.Integration
 
         private async Task ValidateConsumerDispatchConcurrency()
         {
-            ushort expectedConsumerDispatchConcurrency = (ushort)S_Random.Next(3, 10);
+            ushort expectedConsumerDispatchConcurrency = (ushort)RandomNext(3, 10);
             AutorecoveringChannel autorecoveringChannel = (AutorecoveringChannel)_channel;
             Assert.Equal(ConsumerDispatchConcurrency, autorecoveringChannel.ConsumerDispatcher.Concurrency);
             Assert.Equal(_consumerDispatchConcurrency, autorecoveringChannel.ConsumerDispatcher.Concurrency);

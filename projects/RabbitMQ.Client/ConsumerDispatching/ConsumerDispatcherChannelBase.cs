@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -44,7 +44,7 @@ namespace RabbitMQ.Client.ConsumerDispatching
         private readonly System.Threading.Channels.ChannelWriter<WorkStruct> _writer;
         private readonly Task _worker;
         private readonly ushort _concurrency;
-        private bool _quiesce = false;
+        private long _isQuiescing;
         private bool _disposed;
 
         internal ConsumerDispatcherChannelBase(Impl.Channel channel, ushort concurrency)
@@ -79,71 +79,75 @@ namespace RabbitMQ.Client.ConsumerDispatching
             }
         }
 
-        public bool IsShutdown => _quiesce;
+        public bool IsShutdown => IsQuiescing;
 
         public ushort Concurrency => _concurrency;
 
-        public ValueTask HandleBasicConsumeOkAsync(IAsyncBasicConsumer consumer, string consumerTag, CancellationToken cancellationToken)
+        public async ValueTask HandleBasicConsumeOkAsync(IAsyncBasicConsumer consumer, string consumerTag, CancellationToken cancellationToken)
         {
-            if (false == _disposed && false == _quiesce)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (false == _disposed && false == IsQuiescing)
             {
-                AddConsumer(consumer, consumerTag);
-                WorkStruct work = WorkStruct.CreateConsumeOk(consumer, consumerTag);
-                return _writer.WriteAsync(work, cancellationToken);
-            }
-            else
-            {
-                return default;
+                try
+                {
+                    AddConsumer(consumer, consumerTag);
+                    WorkStruct work = WorkStruct.CreateConsumeOk(consumer, consumerTag);
+                    await _writer.WriteAsync(work, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    _ = GetAndRemoveConsumer(consumerTag);
+                    throw;
+                }
             }
         }
 
-        public ValueTask HandleBasicDeliverAsync(string consumerTag, ulong deliveryTag, bool redelivered,
+        public async ValueTask HandleBasicDeliverAsync(string consumerTag, ulong deliveryTag, bool redelivered,
             string exchange, string routingKey, IReadOnlyBasicProperties basicProperties, RentedMemory body,
             CancellationToken cancellationToken)
         {
-            if (false == _disposed && false == _quiesce)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (false == _disposed && false == IsQuiescing)
             {
                 IAsyncBasicConsumer consumer = GetConsumerOrDefault(consumerTag);
                 var work = WorkStruct.CreateDeliver(consumer, consumerTag, deliveryTag, redelivered, exchange, routingKey, basicProperties, body);
-                return _writer.WriteAsync(work, cancellationToken);
-            }
-            else
-            {
-                return default;
+                await _writer.WriteAsync(work, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
-        public ValueTask HandleBasicCancelOkAsync(string consumerTag, CancellationToken cancellationToken)
+        public async ValueTask HandleBasicCancelOkAsync(string consumerTag, CancellationToken cancellationToken)
         {
-            if (false == _disposed && false == _quiesce)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (false == _disposed && false == IsQuiescing)
             {
                 IAsyncBasicConsumer consumer = GetAndRemoveConsumer(consumerTag);
                 WorkStruct work = WorkStruct.CreateCancelOk(consumer, consumerTag);
-                return _writer.WriteAsync(work, cancellationToken);
-            }
-            else
-            {
-                return default;
+                await _writer.WriteAsync(work, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
-        public ValueTask HandleBasicCancelAsync(string consumerTag, CancellationToken cancellationToken)
+        public async ValueTask HandleBasicCancelAsync(string consumerTag, CancellationToken cancellationToken)
         {
-            if (false == _disposed && false == _quiesce)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (false == _disposed && false == IsQuiescing)
             {
                 IAsyncBasicConsumer consumer = GetAndRemoveConsumer(consumerTag);
                 WorkStruct work = WorkStruct.CreateCancel(consumer, consumerTag);
-                return _writer.WriteAsync(work, cancellationToken);
-            }
-            else
-            {
-                return default;
+                await _writer.WriteAsync(work, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
 
         public void Quiesce()
         {
-            _quiesce = true;
+            Interlocked.Exchange(ref _isQuiescing, 1);
         }
 
         public async Task WaitForShutdownAsync()
@@ -153,12 +157,18 @@ namespace RabbitMQ.Client.ConsumerDispatching
                 return;
             }
 
-            if (_quiesce)
+            if (IsQuiescing)
             {
                 try
                 {
-                    await _reader.Completion
-                        .ConfigureAwait(false);
+                    /*
+                     * rabbitmq/rabbitmq-dotnet-client#1751
+                     * Awaiting the work channel reader could deadlock - no idea why.
+                     * Since we await the consumer dispatcher _worker task,
+                     * that should suffice.
+                     *
+                     * await _reader.Completion.ConfigureAwait(false);
+                     */
                     await _worker
                         .ConfigureAwait(false);
                 }
@@ -186,6 +196,19 @@ namespace RabbitMQ.Client.ConsumerDispatching
             else
             {
                 throw new InvalidOperationException("WaitForShutdownAsync called but _quiesce is false");
+            }
+        }
+
+        protected bool IsQuiescing
+        {
+            get
+            {
+                if (Interlocked.Read(ref _isQuiescing) == 1)
+                {
+                    return true;
+                }
+
+                return false;
             }
         }
 

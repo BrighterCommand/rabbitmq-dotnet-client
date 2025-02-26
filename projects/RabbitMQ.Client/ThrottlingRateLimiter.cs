@@ -4,7 +4,7 @@
 // The APL v2.0:
 //
 //---------------------------------------------------------------------------
-//   Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//   Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //
 //   Licensed under the Apache License, Version 2.0 (the "License");
 //   you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 //
-//  Copyright (c) 2007-2024 Broadcom. All Rights Reserved.
+//  Copyright (c) 2007-2025 Broadcom. All Rights Reserved.
 //---------------------------------------------------------------------------
 
 using System;
@@ -134,13 +134,24 @@ namespace RabbitMQ.Client
 
         private int CalculateDelay()
         {
-            long? availablePermits = _concurrencyLimiter.GetStatistics()?.CurrentAvailablePermits;
-            if (!(availablePermits < _throttlingThreshold))
+            RateLimiterStatistics? rateLimiterStatistics = _concurrencyLimiter.GetStatistics();
+            if (rateLimiterStatistics is null)
             {
                 return 0;
             }
 
-            return (int)((1.0 - availablePermits / (double)_maxConcurrency) * 1000);
+            long availablePermits = rateLimiterStatistics.CurrentAvailablePermits;
+            if (availablePermits >= _throttlingThreshold)
+            {
+                /*
+                 * Note: do NOT add a delay because available permits exceeeds the threshold
+                 * below which throttling begins
+                 */
+                return 0;
+            }
+
+            double percentageUsed = 1.0 - (availablePermits / (double)_maxConcurrency);
+            return (int)(percentageUsed * 1000);
         }
     }
 }
